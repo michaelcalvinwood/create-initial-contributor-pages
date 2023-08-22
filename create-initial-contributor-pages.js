@@ -4,7 +4,42 @@ const fs = require('fs');
 const wp = require('./utils/wp-api');
 const ai = require('./utils/ai');
 
+const promptMe = require('prompt-sync')();
 const { convert } = require('html-to-text');
+const { exec } = require("child_process");
+const latinize = require('latinize');
+const mysql = require('mysql2');
+
+const { MYSQL_HOST, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE} = process.env;
+
+const mysqlOptions = {
+    host: MYSQL_HOST,
+    user: MYSQL_USER,
+    password: MYSQL_PASSWORD,
+    database: MYSQL_DATABASE,
+    waitForConnections: true,
+    connectionLimit: 10,
+    maxIdle: 10, // max idle connections, the default value is the same as `connectionLimit`
+    idleTimeout: 60000, // idle connections timeout, in milliseconds, the default value 60000
+    queueLimit: 0,
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 0
+  }
+  
+  const pool = mysql.createPool(mysqlOptions);
+  
+  const query = q => {
+    return new Promise((resolve, reject) => {
+      pool.query(q, function(err, rows, fields) {
+        
+        if (err) {
+            console.error('ERROR', q);
+            return resolve(false);
+        }
+        resolve(rows)
+      });
+    })
+  }
 
 const Contributors = new Set();
 let ContributorSize = 0;
@@ -136,7 +171,7 @@ const handlePost = async post => {
 
 }
 
-const test = async () => {
+const findContributors = async () => {
     await wp.getPosts('https://delta.pymnts.com', 'posts', 20000, handlePost);
 
     fs.writeFileSync('./contributors.json', JSON.stringify(Array.from(Contributors)));
@@ -144,4 +179,58 @@ const test = async () => {
     console.log('SIZE', Array.from(Contributors).length);
 }
 
-test();
+const openChrome = name => {
+    name = latinize(name);
+    let command = `open -a "Google Chrome.app" https://delta.pymnts.com/contributor/${name.replaceAll(' ', '_')}\?key=46f9eac22479d8aeee8f3dcc4b044a7bf0325e73e5a3179748d94c5d961d95df`;
+
+    exec(command, (error, stdout, stderr) => {
+        if (error) {
+            console.log(`error: ${error.message}`);
+            return;
+        }
+        if (stderr) {
+            console.log(`stderr: ${stderr}`);
+            return;
+        }
+        console.log(`stdout: ${stdout}`);
+    });
+
+    //console.log(command);
+}
+
+const contributorExists = async name => {
+    name = latinize(name);
+    const q = `SELECT name, photo, affiliation, role, occupation, bio, contribution, posts, first_post FROM contributors WHERE name='${name}'`;
+
+    const r = await query(q);
+
+    return r.length ? true : false;
+}
+
+const createContributorPages = async () => {
+    let contributors = fs.readFileSync('contributors.json');
+    contributors = JSON.parse(contributors);
+
+    let max = 5;
+    let count = 0;
+
+    for (i = 0; i < contributors.length; ++i) {
+        let test = await contributorExists(contributors[i]);
+        
+        if (test) {
+            console.log('SKIP', contributors[i]);
+            continue;
+        }
+        console.log('CREATE', contributors[i]);
+        
+        openChrome(contributors[i])
+        ++count;
+        if (!(count % max)) {
+            let result = promptMe('Load more?');
+            if (result === 'quit') return; 
+            count = 0;
+        }
+    }
+}
+
+createContributorPages();
